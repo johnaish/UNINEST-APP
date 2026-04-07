@@ -6,7 +6,7 @@ Future<void> main() async {
   try {
     await Firebase.initializeApp(
       options: const FirebaseOptions(
-        apiKey: 'AIzaSyCb6ihnr-QxCKjUVfCN-BA0R8B0a4P0IxI',
+        apiKey: 'apikey here',
         authDomain: 'uninest-app-1.firebaseapp.com',
         projectId: 'uninest-app-1',
         storageBucket: 'uninest-app-1.firebasestorage.app',
