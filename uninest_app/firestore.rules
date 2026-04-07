@@ -1,0 +1,211 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ========================
+    // AUTH (STRICT)
+    // ========================
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(uid()));
+    }
+
+    function hasRole(role) {
+      return isAuth() &&
+        userDoc().exists() &&
+        userDoc().data.role == role;
+    }
+
+    function isAdmin() { return hasRole('admin'); }
+    function isLandlord() { return hasRole('landlord'); }
+    function isStudent() { return hasRole('student'); }
+
+    // ========================
+    // COMMON VALIDATORS
+    // ========================
+    function hasOnlyFields(allowed) {
+      return request.resource.data.keys().hasOnly(allowed);
+    }
+
+    function hasRequiredFields(required) {
+      return request.resource.data.keys().hasAll(required);
+    }
+
+    function isUnchanged(field) {
+      return request.resource.data[field] == resource.data[field];
+    }
+
+    function isTimestamp(field) {
+      return request.resource.data[field] is timestamp;
+    }
+
+    // ========================
+    // USERS
+    // ========================
+    match /users/{userId} {
+
+      allow create: if isAuth() &&
+        uid() == userId &&
+        hasOnlyFields(['fullName','email','phone','username','role','createdAt','updatedAt']) &&
+        request.resource.data.role in ['admin', 'landlord', 'student'] &&
+        isTimestamp('createdAt');
+
+      allow read: if isAuth();
+
+      allow update: if uid() == userId &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['fullName','phone','username','updatedAt']) &&
+        request.resource.data.role == resource.data.role;
+
+      allow update: if isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['role', 'updatedAt']) &&
+        request.resource.data.role in ['admin', 'landlord', 'student'];
+
+      allow delete: if uid() == userId || isAdmin();
+    }
+
+    // ========================
+    // PROPERTIES
+    // ========================
+    match /properties/{propertyId} {
+
+      allow read: if isAuth();
+
+      allow create: if isLandlord() &&
+        hasRequiredFields([
+          'title','location','pricePerMonth','distanceFromCampusKm','roomType',
+          'rating','amenities','isVerified','verificationStatus','verificationAdminId',
+          'verificationNote','imageUrl','landlordName','landlordId','latitude',
+          'longitude','createdAt'
+        ]) &&
+        hasOnlyFields([
+          'title','location','pricePerMonth','distanceFromCampusKm','roomType',
+          'rating','amenities','isVerified','verificationStatus','verificationAdminId',
+          'verificationNote','imageUrl','landlordName','landlordId','latitude',
+          'longitude','createdAt','updatedAt'
+        ]) &&
+        request.resource.data.landlordId == uid() &&
+        request.resource.data.verificationStatus == 'pending' &&
+        request.resource.data.isVerified == false &&
+        request.resource.data.amenities is list &&
+        isTimestamp('createdAt');
+
+      allow update: if isLandlord() &&
+        resource.data.landlordId == uid() &&
+
+        isUnchanged('landlordId') &&
+        isUnchanged('verificationStatus') &&
+        isUnchanged('isVerified') &&
+        isUnchanged('verificationAdminId') &&
+        isUnchanged('verificationNote') &&
+
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            'title','location','pricePerMonth','distanceFromCampusKm','roomType',
+            'rating','amenities','imageUrl','landlordName','latitude','longitude','updatedAt'
+          ]);
+
+      allow delete: if isLandlord() &&
+        resource.data.landlordId == uid() &&
+        resource.data.verificationStatus == 'pending';
+
+      allow update: if isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly([
+            'isVerified','verificationStatus',
+            'verificationAdminId','verificationNote','updatedAt'
+          ]);
+    }
+
+    // ========================
+    // BOOKINGS (STATE MACHINE)
+    // ========================
+    match /bookings/{bookingId} {
+
+      allow create: if isStudent() &&
+        hasRequiredFields([
+          'studentId','propertyId','status','createdAt'
+        ]) &&
+        request.resource.data.studentId == uid() &&
+        request.resource.data.status == 'pending' &&
+        exists(/databases/$(database)/documents/properties/$(request.resource.data.propertyId)) &&
+        isTimestamp('createdAt');
+
+      allow read: if uid() == resource.data.studentId ||
+        (isLandlord() &&
+          get(/databases/$(database)/documents/properties/$(resource.data.propertyId)).data.landlordId == uid());
+
+      // Student: ONLY cancel
+      allow update: if uid() == resource.data.studentId &&
+        resource.data.status == 'pending' &&
+        request.resource.data.status == 'cancelled';
+
+      // Landlord: approve/reject ONLY
+      allow update: if isLandlord() &&
+        get(/databases/$(database)/documents/properties/$(resource.data.propertyId)).data.landlordId == uid() &&
+        resource.data.status == 'pending' &&
+        request.resource.data.status in ['approved','rejected'];
+    }
+
+    // ========================
+    // MESSAGES (STRICT)
+    // ========================
+    match /messages/{messageId} {
+
+      allow read: if isAuth() &&
+        uid() in resource.data.participants;
+
+      allow create: if isAuth() &&
+        uid() in request.resource.data.participants &&
+        request.resource.data.participants.size() == 2 &&
+        hasOnlyFields(['participants','message','createdAt']) &&
+        isTimestamp('createdAt');
+
+      allow update: if isAuth() &&
+        uid() in resource.data.participants &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['readBy']);
+    }
+
+    // ========================
+    // CONVERSATIONS
+    // ========================
+    match /conversations/{conversationId} {
+
+      allow read: if isAuth() &&
+        uid() in resource.data.participants;
+
+      allow create: if isAuth() &&
+        uid() in request.resource.data.participants &&
+        request.resource.data.participants.size() == 2;
+
+      allow update: if isAuth() &&
+        uid() in resource.data.participants &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['lastMessage','lastMessageTime']);
+    }
+
+    // ========================
+    // ADMIN
+    // ========================
+    match /admin/{doc=**} {
+      allow read, write: if isAdmin();
+    }
+
+    // ========================
+    // PUBLIC
+    // ========================
+    match /public/{doc=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

@@ -1,0 +1,17 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /property_images/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null 
+        && request.auth.uid == userId
+        && resource.metadata.size() <= 5 * 1024 * 1024; // 5MB max
+    }
+    
+    // Allow reads for all images
+    match /property_images/{allPaths=**} {
+      allow read: if request.auth != null;
+    }
+  }
+}
+
